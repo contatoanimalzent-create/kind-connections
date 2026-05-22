@@ -221,98 +221,121 @@ function Index() {
       <Toaster position="top-right" />
 
       {/* Header */}
-      <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <MapIcon className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-base font-semibold text-foreground">Auto Planta IA</h1>
-            <p className="text-xs text-muted-foreground">
-              Imagens de eventos → plantas baixas editáveis
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={!generated} onClick={exportPNG}>
-            <FileImage className="h-4 w-4 mr-1.5" /> PNG
-          </Button>
-          <Button variant="outline" size="sm" disabled={!generated} onClick={exportPDF}>
-            <Download className="h-4 w-4 mr-1.5" /> PDF
-          </Button>
-        </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left panel: upload + preview */}
-        <aside className="w-72 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-border space-y-3">
-            <h2 className="text-sm font-semibold text-foreground">1. Imagem original</h2>
-            <label
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={onDrop}
-              className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-background px-4 py-5 cursor-pointer hover:border-primary/50 hover:bg-accent transition-colors"
-            >
-              <Upload className="h-5 w-5 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground text-center">
-                Arraste uma imagem ou clique
-              </span>
-              <input type="file" accept="image/*" className="hidden" onChange={onInputChange} />
-            </label>
-            <Button
-              className="w-full"
-              onClick={generate}
-              disabled={!imageFile || loading}
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Analisando...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2" /> Gerar planta baixa
-                </>
-              )}
-            </Button>
-            <p className="text-[11px] text-muted-foreground leading-relaxed">
-              A IA identifica palco, tendas, food trucks, banheiros, saídas, extintores e mais.
-            </p>
-          </div>
-
-          {imageUrl && (
-            <div className="p-4 overflow-y-auto">
-              <p className="text-xs font-medium text-muted-foreground mb-2">Preview</p>
-              <div className="rounded-md overflow-hidden border border-border bg-muted">
-                <img src={imageUrl} alt="Original" className="w-full h-auto" />
-              </div>
+      {!focusMode && (
+        <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <MapIcon className="h-5 w-5" />
             </div>
-          )}
-        </aside>
+            <div>
+              <h1 className="text-base font-semibold text-foreground">Auto Planta IA</h1>
+              <p className="text-xs text-muted-foreground">
+                Imagens de eventos → plantas baixas editáveis
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" disabled={!generated} onClick={() => setFocusMode(true)}>
+              <Maximize2 className="h-4 w-4 mr-1.5" /> Tela cheia
+            </Button>
+            <Button variant="outline" size="sm" disabled={!generated} onClick={exportPNG}>
+              <FileImage className="h-4 w-4 mr-1.5" /> PNG
+            </Button>
+            <Button variant="outline" size="sm" disabled={!generated} onClick={exportPDF}>
+              <Download className="h-4 w-4 mr-1.5" /> PDF
+            </Button>
+          </div>
+        </header>
+      )}
+
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Left panel: upload + preview */}
+        {!focusMode && (
+          <aside className="w-72 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
+            <div className="p-4 border-b border-border space-y-3">
+              <h2 className="text-sm font-semibold text-foreground">1. Imagem original</h2>
+              <label
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={onDrop}
+                className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-background px-4 py-5 cursor-pointer hover:border-primary/50 hover:bg-accent transition-colors"
+              >
+                <Upload className="h-5 w-5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground text-center">
+                  Arraste uma imagem ou clique
+                </span>
+                <input type="file" accept="image/*" className="hidden" onChange={onInputChange} />
+              </label>
+              <Button
+                className="w-full"
+                onClick={generate}
+                disabled={!imageFile || loading}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Analisando...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 mr-2" /> Gerar planta baixa
+                  </>
+                )}
+              </Button>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                A IA identifica palco, tendas, food trucks, banheiros, saídas, extintores e mais.
+              </p>
+            </div>
+
+            {imageUrl && (
+              <div className="p-4 overflow-y-auto">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Preview</p>
+                <div className="rounded-md overflow-hidden border border-border bg-muted">
+                  <img src={imageUrl} alt="Original" className="w-full h-auto" />
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
 
         {/* Canvas */}
         <main className="flex-1 overflow-auto bg-muted/30 p-6">
           <div className="mx-auto rounded-lg border border-border bg-white shadow-sm" style={{ width: CANVAS_W }}>
-            <div className="border-b border-border px-4 py-2 flex items-center justify-between">
-              <p className="text-xs font-medium text-muted-foreground">Planta baixa</p>
-              {generated && (
-                <p className="text-[11px] text-muted-foreground">
-                  Clique nos objetos para mover, redimensionar ou rotacionar
-                </p>
-              )}
-            </div>
+            {!focusMode && (
+              <div className="border-b border-border px-4 py-2 flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">Planta baixa</p>
+                {generated && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Clique nos objetos para mover, redimensionar ou rotacionar
+                  </p>
+                )}
+              </div>
+            )}
             <canvas ref={canvasElRef} width={CANVAS_W} height={CANVAS_H} />
           </div>
         </main>
 
         {/* Right sidebar */}
-        <ObjectSidebar
-          objects={objects}
-          selectedId={selectedId}
-          onSelect={handleSelect}
-          onDelete={handleDelete}
-          onRename={handleRename}
-          onAdd={handleAdd}
-        />
+        {!focusMode && (
+          <ObjectSidebar
+            objects={objects}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+            onDelete={handleDelete}
+            onRename={handleRename}
+            onAdd={handleAdd}
+          />
+        )}
+
+        {/* Focus mode exit button */}
+        {focusMode && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setFocusMode(false)}
+            className="absolute top-4 right-4 z-10 shadow-md"
+          >
+            <Minimize2 className="h-4 w-4 mr-1.5" /> Sair da tela cheia (Esc)
+          </Button>
+        )}
       </div>
     </div>
   );
