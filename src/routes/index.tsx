@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as fabric from "fabric";
 import jsPDF from "jspdf";
-import { Upload, Sparkles, Download, FileImage, Loader2, Map } from "lucide-react";
+import { Upload, Sparkles, Download, FileImage, Loader2, Map as MapIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
