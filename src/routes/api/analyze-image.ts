@@ -1,57 +1,87 @@
 import { createFileRoute } from "@tanstack/react-router";
+import type { FloorPlanData } from "@/lib/floorplan-types";
 
-type Detected = {
-  id: string;
-  type: string;
-  label: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  confidence: number;
-  text?: string;
+const SYSTEM_PROMPT = `Você é um conversor de mapas/croquis de eventos em PLANTAS BAIXAS por CAMADAS.
+
+OBJETIVO: máxima FIDELIDADE VISUAL ao original. NÃO simplifique. NÃO invente. NÃO remova textos.
+
+Coordenadas SEMPRE normalizadas de 0 a 1 (x da esquerda, y de cima).
+Para bbox: [x, y, w, h]. Para points: [[x,y], ...].
+
+Devolva APENAS JSON válido (sem markdown) neste formato exato:
+{
+  "width": <px imagem original>,
+  "height": <px imagem original>,
+  "layers": {
+    "boundaries": [
+      { "id":"b1", "shape":"polygon"|"polyline"|"rect",
+        "points":[[x,y],...] OR "bbox":[x,y,w,h],
+        "stroke":"#hex", "strokeWidth":2, "dashed":false, "fill":"#hex?|transparent", "label":"opcional" }
+    ],
+    "zones": [
+      { "id":"z1", "shape":"polygon"|"rect",
+        "points":[...] OR "bbox":[x,y,w,h],
+        "fill":"#hex", "opacity":0.5, "label":"Área VIP" }
+    ],
+    "icons": [
+      { "id":"i1", "type":"palco|tenda|food_truck|banheiro|gerador|ambulancia|posto_medico|saida|extintor|unknown",
+        "bbox":[x,y,w,h], "label":"texto curto", "confidence":0..1, "color":"#hex opcional" }
+    ],
+    "texts": [
+      { "id":"t1", "text":"conteúdo exato", "x":0..1, "y":0..1, "fontSize":0..1 (proporcional à altura), "color":"#hex", "weight":"bold|normal", "rotation":0, "confidence":0..1 }
+    ],
+    "legend": [
+      { "id":"lg1", "bbox":[x,y,w,h], "items":[{"symbol":"opt","color":"#hex","label":"texto"}] }
+    ]
+  }
+}
+
+REGRAS CRÍTICAS:
+- Detecte TODOS os textos visíveis (títulos, labels, números, legendas). Não pule nenhum.
+- Detecte TODAS as áreas coloridas como "zones" com a COR REAL aproximada em hex.
+- Detecte TODAS as linhas/perímetros/caminhos como "boundaries" (polyline para caminhos, polygon para áreas fechadas).
+- Detecte TODOS os ícones/objetos. Se não souber o tipo, use "unknown" e preencha label com o que estiver escrito ou descrição curta.
+- Se há uma legenda/quadro de símbolos, coloque em "legend".
+- NUNCA invente itens que não existem na imagem.
+- NUNCA agrupe textos diferentes em um só.
+- Cores em hex (#rrggbb).`;
+
+const FALLBACK: FloorPlanData = {
+  width: 1000,
+  height: 680,
+  layers: {
+    boundaries: [
+      { id: "b1", shape: "rect", bbox: [0.05, 0.08, 0.9, 0.84], stroke: "#0a0a0a", strokeWidth: 2, dashed: true },
+    ],
+    zones: [
+      { id: "z1", shape: "rect", bbox: [0.38, 0.12, 0.24, 0.14], fill: "#111111", opacity: 0.85, label: "Palco" },
+    ],
+    icons: [
+      { id: "i1", type: "saida", bbox: [0.05, 0.5, 0.04, 0.08], label: "Saída", confidence: 0.5 },
+      { id: "i2", type: "tenda", bbox: [0.12, 0.35, 0.12, 0.12], label: "Tenda", confidence: 0.5 },
+    ],
+    texts: [
+      { id: "t1", text: "EXEMPLO — IA indisponível", x: 0.3, y: 0.05, fontSize: 0.025, weight: "bold", color: "#dc2626" },
+    ],
+    legend: [],
+  },
 };
 
-const CANVAS_W = 1000;
-const CANVAS_H = 680;
-
-const MOCK_FALLBACK: Detected[] = [
-  { id: "area-1", type: "area", label: "Área Principal", x: 60, y: 60, width: 880, height: 560, confidence: 0.6 },
-  { id: "palco-1", type: "palco", label: "Palco", x: 380, y: 90, width: 240, height: 90, confidence: 0.6 },
-  { id: "tenda-1", type: "tenda", label: "Tenda", x: 110, y: 240, width: 120, height: 90, confidence: 0.6 },
-  { id: "saida-1", type: "saida", label: "Saída", x: 60, y: 340, width: 30, height: 60, confidence: 0.6 },
-];
-
-const SYSTEM_PROMPT = `Você analisa uma imagem de mapa/croqui de evento e devolve, em JSON, todos os elementos visíveis convertidos para uma planta baixa.
-
-Regras OBRIGATÓRIAS:
-- Coordenadas em pixels num canvas ${CANVAS_W}x${CANVAS_H}.
-- Mapeie a imagem inteira para esse canvas mantendo as proporções e posições RELATIVAS reais do que você vê.
-- Identifique TODOS os elementos visíveis: a área/perímetro do evento, palco, tendas, food trucks, banheiros, gerador, ambulância, posto médico, saídas de emergência, extintores, e textos importantes.
-- Use SOMENTE estes valores em "type": area, palco, tenda, food_truck, banheiro, gerador, ambulancia, posto_medico, saida, extintor, texto.
-- "label" curto em português. Para "texto", inclua o conteúdo em "text".
-- "confidence" entre 0 e 1.
-- Não invente itens que não existem na imagem. Se a imagem não contém algo, não inclua.
-- Responda APENAS JSON válido, sem markdown, no formato: {"objects":[{...}]}`;
-
-async function callVision(imageDataUrl: string): Promise<Detected[] | null> {
+async function callVision(imageDataUrl: string): Promise<FloorPlanData | null> {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) return null;
 
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
+      model: "google/gemini-2.5-pro",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         {
           role: "user",
           content: [
-            { type: "text", text: `Analise esta imagem e gere a planta baixa em JSON. Canvas ${CANVAS_W}x${CANVAS_H}.` },
+            { type: "text", text: "Converta esta imagem em planta baixa por camadas com máxima fidelidade. Retorne SOMENTE JSON." },
             { type: "image_url", image_url: { url: imageDataUrl } },
           ],
         },
@@ -64,35 +94,38 @@ async function callVision(imageDataUrl: string): Promise<Detected[] | null> {
     console.error("AI gateway error", res.status, await res.text().catch(() => ""));
     return null;
   }
-
   const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const content = json.choices?.[0]?.message?.content;
   if (!content) return null;
 
   try {
-    const parsed = JSON.parse(content) as { objects?: Detected[] };
-    if (!Array.isArray(parsed.objects)) return null;
-    return parsed.objects
-      .filter((o) => o && typeof o.type === "string")
-      .map((o, i) => ({
-        id: o.id || `${o.type}-${i}-${Date.now()}`,
-        type: o.type,
-        label: o.label || o.type,
-        x: clamp(Number(o.x) || 0, 0, CANVAS_W),
-        y: clamp(Number(o.y) || 0, 0, CANVAS_H),
-        width: clamp(Number(o.width) || 60, 8, CANVAS_W),
-        height: clamp(Number(o.height) || 60, 8, CANVAS_H),
-        confidence: clamp(Number(o.confidence) || 0.7, 0, 1),
-        text: o.text,
-      }));
+    const parsed = JSON.parse(content) as Partial<FloorPlanData>;
+    const layers = parsed.layers ?? ({} as Partial<FloorPlanData["layers"]>);
+    const data: FloorPlanData = {
+      width: Number(parsed.width) || 1000,
+      height: Number(parsed.height) || 680,
+      layers: {
+        boundaries: Array.isArray(layers.boundaries) ? layers.boundaries : [],
+        zones: Array.isArray(layers.zones) ? layers.zones : [],
+        icons: Array.isArray(layers.icons) ? layers.icons : [],
+        texts: Array.isArray(layers.texts) ? layers.texts : [],
+        legend: Array.isArray(layers.legend) ? layers.legend : [],
+      },
+    };
+    // give ids if missing
+    let n = 0;
+    const idify = <T extends { id?: string }>(arr: T[], prefix: string) =>
+      arr.forEach((o) => { if (!o.id) o.id = `${prefix}-${++n}`; });
+    idify(data.layers.boundaries, "b");
+    idify(data.layers.zones, "z");
+    idify(data.layers.icons, "i");
+    idify(data.layers.texts, "t");
+    idify(data.layers.legend, "lg");
+    return data;
   } catch (e) {
     console.error("Parse error", e);
     return null;
   }
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
 }
 
 export const Route = createFileRoute("/api/analyze-image")({
@@ -110,24 +143,23 @@ export const Route = createFileRoute("/api/analyze-image")({
           const mime = file.type || "image/png";
           const dataUrl = `data:${mime};base64,${b64}`;
 
-          const objects = await callVision(dataUrl);
-          if (!objects || objects.length === 0) {
-            return Response.json({
-              width: CANVAS_W,
-              height: CANVAS_H,
-              objects: MOCK_FALLBACK,
-              fallback: true,
-            });
+          const data = await callVision(dataUrl);
+          if (!data) {
+            return Response.json({ data: FALLBACK, fallback: true });
           }
-          return Response.json({ width: CANVAS_W, height: CANVAS_H, objects });
+          const totals =
+            data.layers.boundaries.length +
+            data.layers.zones.length +
+            data.layers.icons.length +
+            data.layers.texts.length +
+            data.layers.legend.length;
+          if (totals === 0) {
+            return Response.json({ data: FALLBACK, fallback: true });
+          }
+          return Response.json({ data });
         } catch (e) {
           console.error(e);
-          return Response.json({
-            width: CANVAS_W,
-            height: CANVAS_H,
-            objects: MOCK_FALLBACK,
-            fallback: true,
-          });
+          return Response.json({ data: FALLBACK, fallback: true });
         }
       },
     },
