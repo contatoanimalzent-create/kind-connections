@@ -1,235 +1,236 @@
 import * as fabric from "fabric";
-import type {
-  FloorPlanData,
-  LayerBoundary,
-  LayerIcon,
-  LayerLegend,
-  LayerText,
-  LayerZone,
-  LayerVisibility,
-  RenderMode,
-} from "./floorplan-types";
 
-const ICON_SYMBOLS: Record<string, { symbol: string; color: string; bg: string }> = {
-  palco: { symbol: "PALCO", color: "#ffffff", bg: "#111111" },
-  tenda: { symbol: "TENDA", color: "#111", bg: "#ffffff" },
-  food_truck: { symbol: "🍔", color: "#111", bg: "#fff7ed" },
-  banheiro: { symbol: "WC", color: "#111", bg: "#eef2ff" },
-  gerador: { symbol: "⚡", color: "#111", bg: "#fef9c3" },
-  ambulancia: { symbol: "🚑", color: "#fff", bg: "#dc2626" },
-  posto_medico: { symbol: "✚", color: "#fff", bg: "#dc2626" },
-  saida: { symbol: "SAÍDA", color: "#fff", bg: "#16a34a" },
-  extintor: { symbol: "E", color: "#fff", bg: "#dc2626" },
-  unknown: { symbol: "?", color: "#111", bg: "#f3f4f6" },
+export const DETECTED_TYPES = [
+  "stage",
+  "tent",
+  "bathroom",
+  "ambulance",
+  "medical",
+  "generator",
+  "food_truck",
+  "emergency_exit",
+  "fire_extinguisher",
+  "text",
+  "wall",
+  "area",
+  "gate",
+  "unknown",
+] as const;
+
+export type DetectedType = (typeof DETECTED_TYPES)[number];
+
+export type Detected = {
+  id: string;
+  type: DetectedType;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  confidence: number;
 };
 
-function scalePt(p: [number, number], W: number, H: number): [number, number] {
-  return [p[0] * W, p[1] * H];
+export type AnalysisResult = {
+  canvas: {
+    width: number;
+    height: number;
+  };
+  objects: Detected[];
+};
+
+export type EditableData = {
+  id: string;
+  name: string;
+  type:
+    | DetectedType
+    | "rectangle"
+    | "line"
+    | "polygon"
+    | "freehand"
+    | "measure"
+    | "note"
+    | "object";
+  confidence?: number;
+  layerId: string;
+  locked?: boolean;
+};
+
+export const DEFAULT_LAYER_ID = "main";
+
+const STYLE: Record<DetectedType, { fill: string; stroke: string; symbol: string; label: string }> =
+  {
+    stage: { fill: "#111827", stroke: "#020617", symbol: "ST", label: "Palco" },
+    tent: { fill: "#fef3c7", stroke: "#b45309", symbol: "^", label: "Tenda" },
+    bathroom: { fill: "#e0f2fe", stroke: "#0284c7", symbol: "WC", label: "Banheiro" },
+    ambulance: { fill: "#fee2e2", stroke: "#dc2626", symbol: "+", label: "Ambulância" },
+    medical: { fill: "#dcfce7", stroke: "#16a34a", symbol: "+", label: "Médico" },
+    generator: { fill: "#e4e4e7", stroke: "#52525b", symbol: "G", label: "Gerador" },
+    food_truck: { fill: "#ffedd5", stroke: "#ea580c", symbol: "FD", label: "Food" },
+    emergency_exit: { fill: "#16a34a", stroke: "#15803d", symbol: ">", label: "Saída" },
+    fire_extinguisher: { fill: "#fee2e2", stroke: "#dc2626", symbol: "E", label: "Extintor" },
+    text: { fill: "transparent", stroke: "#111827", symbol: "T", label: "Texto" },
+    wall: { fill: "#f5f5f4", stroke: "#57534e", symbol: "||", label: "Parede" },
+    area: { fill: "rgba(20,184,166,0.08)", stroke: "#0f766e", symbol: "A", label: "Área" },
+    gate: { fill: "#e0e7ff", stroke: "#4f46e5", symbol: "GT", label: "Portão" },
+    unknown: { fill: "#f5f5f5", stroke: "#737373", symbol: "?", label: "Objeto" },
+  };
+
+export function getObjectData(object: fabric.Object): EditableData | undefined {
+  return (object as fabric.Object & { data?: EditableData }).data;
 }
 
-function tagLayer(obj: fabric.Object, layer: string, dataId?: string) {
-  (obj as fabric.Object & { data?: unknown }).data = { layer, id: dataId };
+export function setObjectData(object: fabric.Object, data: EditableData) {
+  (object as fabric.Object & { data?: EditableData }).data = data;
 }
 
-function addBoundary(canvas: fabric.Canvas, b: LayerBoundary, W: number, H: number, mode: RenderMode) {
-  const stroke = b.stroke ?? (mode === "clean" ? "#0a0a0a" : "#1f2937");
-  const strokeWidth = b.strokeWidth ?? 2;
-  const dash = b.dashed ? [8, 6] : undefined;
-  let obj: fabric.Object | null = null;
-  if (b.shape === "rect" && b.bbox) {
-    const [x, y, w, h] = b.bbox;
-    obj = new fabric.Rect({
-      left: x * W,
-      top: y * H,
-      width: w * W,
-      height: h * H,
-      fill: b.fill ?? "transparent",
-      stroke,
-      strokeWidth,
-      strokeDashArray: dash,
-    });
-  } else if (b.points && b.points.length >= 2) {
-    const pts = b.points.map((p) => ({ x: p[0] * W, y: p[1] * H }));
-    if (b.shape === "polygon") {
-      obj = new fabric.Polygon(pts, { fill: b.fill ?? "transparent", stroke, strokeWidth, strokeDashArray: dash });
-    } else {
-      obj = new fabric.Polyline(pts, { fill: "", stroke, strokeWidth, strokeDashArray: dash });
-    }
-  }
-  if (obj) {
-    tagLayer(obj, "boundaries", b.id);
-    canvas.add(obj);
-  }
+export function makeId(prefix = "obj") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`;
 }
 
-function addZone(canvas: fabric.Canvas, z: LayerZone, W: number, H: number, mode: RenderMode) {
-  const opacity = z.opacity ?? (mode === "clean" ? 0.25 : 0.55);
-  let obj: fabric.Object | null = null;
-  if (z.shape === "rect" && z.bbox) {
-    const [x, y, w, h] = z.bbox;
-    obj = new fabric.Rect({
-      left: x * W,
-      top: y * H,
-      width: w * W,
-      height: h * H,
-      fill: z.fill,
-      opacity,
-      stroke: "transparent",
-    });
-  } else if (z.points && z.points.length >= 3) {
-    const pts = z.points.map((p) => ({ x: p[0] * W, y: p[1] * H }));
-    obj = new fabric.Polygon(pts, { fill: z.fill, opacity, stroke: "transparent" });
-  }
-  if (obj) {
-    tagLayer(obj, "zones", z.id);
-    canvas.add(obj);
-  }
+function baseData(obj: Detected): EditableData {
+  return {
+    id: obj.id || makeId(obj.type),
+    name: obj.label,
+    type: obj.type,
+    confidence: obj.confidence,
+    layerId: DEFAULT_LAYER_ID,
+  };
 }
 
-function addIcon(canvas: fabric.Canvas, ic: LayerIcon, W: number, H: number, mode: RenderMode) {
-  const [x, y, w, h] = ic.bbox;
-  const px = x * W;
-  const py = y * H;
-  const pw = Math.max(8, w * W);
-  const ph = Math.max(8, h * H);
-  const meta = ICON_SYMBOLS[ic.type] ?? ICON_SYMBOLS.unknown;
-  const bg = ic.color ?? meta.bg;
+function decorate(object: fabric.Object, data: EditableData) {
+  setObjectData(object, data);
+  object.set({
+    cornerColor: "#2563eb",
+    cornerStrokeColor: "#ffffff",
+    borderColor: "#2563eb",
+    cornerStyle: "circle",
+    transparentCorners: false,
+  });
+  return object;
+}
+
+function scaledObject(obj: Detected, scaleX: number, scaleY: number): Detected {
+  return {
+    ...obj,
+    x: obj.x * scaleX,
+    y: obj.y * scaleY,
+    width: Math.max(obj.width * scaleX, 18),
+    height: Math.max(obj.height * scaleY, 18),
+  };
+}
+
+export function buildFabricObject(obj: Detected): fabric.Object {
+  const style = STYLE[obj.type] ?? STYLE.unknown;
+
+  if (obj.type === "text") {
+    return decorate(
+      new fabric.IText(obj.label, {
+        left: obj.x,
+        top: obj.y,
+        angle: obj.rotation,
+        fontSize: Math.max(14, Math.min(26, obj.height)),
+        fontFamily: "Inter, Arial, sans-serif",
+        fontWeight: "700",
+        fill: style.stroke,
+      }),
+      baseData(obj),
+    );
+  }
+
+  if (obj.type === "wall") {
+    return decorate(
+      new fabric.Rect({
+        left: obj.x,
+        top: obj.y,
+        width: obj.width,
+        height: obj.height,
+        angle: obj.rotation,
+        fill: style.fill,
+        stroke: style.stroke,
+        strokeWidth: 4,
+      }),
+      baseData(obj),
+    );
+  }
+
+  if (obj.type === "area") {
+    return decorate(
+      new fabric.Rect({
+        left: obj.x,
+        top: obj.y,
+        width: obj.width,
+        height: obj.height,
+        angle: obj.rotation,
+        fill: style.fill,
+        stroke: style.stroke,
+        strokeWidth: 2,
+        strokeDashArray: [10, 6],
+        rx: 4,
+        ry: 4,
+      }),
+      baseData(obj),
+    );
+  }
 
   const rect = new fabric.Rect({
-    width: pw,
-    height: ph,
-    fill: bg,
-    stroke: "#0a0a0a",
-    strokeWidth: mode === "clean" ? 1.5 : 1,
-    rx: 4,
-    ry: 4,
+    width: obj.width,
+    height: obj.height,
+    fill: style.fill,
+    stroke: style.stroke,
+    strokeWidth: 2,
+    rx: 5,
+    ry: 5,
   });
-  const label = ic.type === "unknown" ? ic.label || "?" : meta.symbol;
-  const fontSize = Math.max(9, Math.min(pw, ph) * (label.length > 4 ? 0.28 : 0.5));
-  const txt = new fabric.FabricText(label, {
-    fontSize,
-    fill: meta.color,
-    fontFamily: "Inter, sans-serif",
+  const symbol = new fabric.FabricText(style.symbol, {
+    fontSize: Math.min(22, Math.max(11, Math.min(obj.width, obj.height) * 0.34)),
+    fill: obj.type === "stage" || obj.type === "emergency_exit" ? "#ffffff" : style.stroke,
+    fontFamily: "Inter, Arial, sans-serif",
+    fontWeight: "800",
+    originX: "center",
+    originY: "center",
+    left: obj.width / 2,
+    top: Math.max(12, obj.height / 2 - 7),
+    selectable: false,
+    evented: false,
+  });
+  const label = new fabric.FabricText(style.label, {
+    fontSize: Math.min(12, Math.max(8, obj.width / 8)),
+    fill: obj.type === "stage" || obj.type === "emergency_exit" ? "#ffffff" : "#111827",
+    fontFamily: "Inter, Arial, sans-serif",
     fontWeight: "700",
     originX: "center",
     originY: "center",
-    left: pw / 2,
-    top: ph / 2,
-  });
-  const grp = new fabric.Group([rect, txt], { left: px, top: py });
-  tagLayer(grp, "icons", ic.id);
-  canvas.add(grp);
-}
-
-function addText(canvas: fabric.Canvas, t: LayerText, W: number, H: number) {
-  const fs = Math.max(8, t.fontSize * H);
-  const obj = new fabric.FabricText(t.text, {
-    left: t.x * W,
-    top: t.y * H,
-    fontSize: fs,
-    fill: t.color ?? "#0a0a0a",
-    fontWeight: t.weight === "bold" ? "700" : "500",
-    fontFamily: "Inter, sans-serif",
-    angle: t.rotation ?? 0,
-  });
-  tagLayer(obj, "texts", t.id);
-  canvas.add(obj);
-}
-
-function addLegend(canvas: fabric.Canvas, lg: LayerLegend, W: number, H: number) {
-  const [x, y, w, h] = lg.bbox;
-  const px = x * W;
-  const py = y * H;
-  const pw = Math.max(80, w * W);
-  const ph = Math.max(40, h * H);
-  const bg = new fabric.Rect({
-    width: pw,
-    height: ph,
-    fill: "#ffffff",
-    stroke: "#0a0a0a",
-    strokeWidth: 1,
-    rx: 4,
-    ry: 4,
-  });
-  const children: fabric.Object[] = [bg];
-  const lineH = Math.min(20, ph / Math.max(1, lg.items.length));
-  lg.items.forEach((it, i) => {
-    const top = 6 + i * lineH;
-    if (it.color) {
-      children.push(
-        new fabric.Rect({ left: 8, top: top + 2, width: 12, height: 12, fill: it.color, stroke: "#0a0a0a", strokeWidth: 0.5 }),
-      );
-    }
-    children.push(
-      new fabric.FabricText(`${it.symbol ?? ""} ${it.label}`.trim(), {
-        left: 26,
-        top,
-        fontSize: 11,
-        fill: "#0a0a0a",
-        fontFamily: "Inter, sans-serif",
-      }),
-    );
-  });
-  const grp = new fabric.Group(children, { left: px, top: py });
-  tagLayer(grp, "legend", lg.id);
-  canvas.add(grp);
-}
-
-async function addBackgroundReference(canvas: fabric.Canvas, url: string, W: number, H: number, mode: RenderMode) {
-  const img = await fabric.FabricImage.fromURL(url, { crossOrigin: "anonymous" });
-  img.set({
-    left: 0,
-    top: 0,
+    left: obj.width / 2,
+    top: Math.min(obj.height - 10, obj.height / 2 + 14),
     selectable: false,
     evented: false,
-    opacity: mode === "high_fidelity" ? 0.35 : 0.08,
   });
-  img.scaleToWidth(W);
-  if (img.getScaledHeight() < H) img.scaleToHeight(H);
-  tagLayer(img, "background_reference", "bg");
-  canvas.add(img);
-  canvas.sendObjectToBack(img);
+
+  return decorate(
+    new fabric.Group([rect, symbol, label], {
+      left: obj.x,
+      top: obj.y,
+      angle: obj.rotation,
+    }),
+    baseData(obj),
+  );
 }
 
-function drawGrid(canvas: fabric.Canvas, W: number, H: number) {
-  const step = 40;
-  for (let i = 0; i <= W; i += step) {
-    const l = new fabric.Line([i, 0, i, H], { stroke: "#eef0f3", selectable: false, evented: false });
-    tagLayer(l, "grid", `gx-${i}`);
-    canvas.add(l);
+export function renderFloorPlan(canvas: fabric.Canvas, analysis: AnalysisResult) {
+  canvas.discardActiveObject();
+  canvas.getObjects().forEach((object) => {
+    if (getObjectData(object)?.layerId !== "guides") canvas.remove(object);
+  });
+
+  const scaleX = canvas.getWidth() / Math.max(analysis.canvas.width, 1);
+  const scaleY = canvas.getHeight() / Math.max(analysis.canvas.height, 1);
+  const sorted = [...analysis.objects].sort((a, b) =>
+    a.type === "area" ? -1 : b.type === "area" ? 1 : 0,
+  );
+
+  for (const object of sorted) {
+    canvas.add(buildFabricObject(scaledObject(object, scaleX, scaleY)));
   }
-  for (let j = 0; j <= H; j += step) {
-    const l = new fabric.Line([0, j, W, j], { stroke: "#eef0f3", selectable: false, evented: false });
-    tagLayer(l, "grid", `gy-${j}`);
-    canvas.add(l);
-  }
-}
-
-export async function renderFloorPlanLayered(
-  canvas: fabric.Canvas,
-  data: FloorPlanData,
-  mode: RenderMode,
-  visibility: LayerVisibility,
-) {
-  const W = canvas.getWidth();
-  const H = canvas.getHeight();
-  canvas.clear();
-  canvas.backgroundColor = "#fafafa";
-
-  if (mode === "clean") drawGrid(canvas, W, H);
-
-  if (visibility.background_reference && data.imageUrl) {
-    try {
-      await addBackgroundReference(canvas, data.imageUrl, W, H, mode);
-    } catch (e) {
-      console.warn("bg ref failed", e);
-    }
-  }
-  if (visibility.zones) data.layers.zones.forEach((z) => addZone(canvas, z, W, H, mode));
-  if (visibility.boundaries) data.layers.boundaries.forEach((b) => addBoundary(canvas, b, W, H, mode));
-  if (visibility.icons) data.layers.icons.forEach((ic) => addIcon(canvas, ic, W, H, mode));
-  if (visibility.texts) data.layers.texts.forEach((t) => addText(canvas, t, W, H));
-  if (visibility.legend) data.layers.legend.forEach((lg) => addLegend(canvas, lg, W, H));
-
   canvas.requestRenderAll();
 }

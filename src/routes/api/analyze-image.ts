@@ -1,167 +1,319 @@
 import { createFileRoute } from "@tanstack/react-router";
-import type { FloorPlanData } from "@/lib/floorplan-types";
 
-const SYSTEM_PROMPT = `Você é um conversor de mapas/croquis de eventos em PLANTAS BAIXAS por CAMADAS.
+export const ANALYSIS_TYPES = [
+  "stage",
+  "tent",
+  "bathroom",
+  "ambulance",
+  "medical",
+  "generator",
+  "food_truck",
+  "emergency_exit",
+  "fire_extinguisher",
+  "text",
+  "wall",
+  "area",
+  "gate",
+  "unknown",
+] as const;
 
-OBJETIVO: máxima FIDELIDADE VISUAL ao original. NÃO simplifique. NÃO invente. NÃO remova textos.
+type AnalysisType = (typeof ANALYSIS_TYPES)[number];
 
-Coordenadas SEMPRE normalizadas de 0 a 1 (x da esquerda, y de cima).
-Para bbox: [x, y, w, h]. Para points: [[x,y], ...].
-
-Devolva APENAS JSON válido (sem markdown) neste formato exato:
-{
-  "width": <px imagem original>,
-  "height": <px imagem original>,
-  "layers": {
-    "boundaries": [
-      { "id":"b1", "shape":"polygon"|"polyline"|"rect",
-        "points":[[x,y],...] OR "bbox":[x,y,w,h],
-        "stroke":"#hex", "strokeWidth":2, "dashed":false, "fill":"#hex?|transparent", "label":"opcional" }
-    ],
-    "zones": [
-      { "id":"z1", "shape":"polygon"|"rect",
-        "points":[...] OR "bbox":[x,y,w,h],
-        "fill":"#hex", "opacity":0.5, "label":"Área VIP" }
-    ],
-    "icons": [
-      { "id":"i1", "type":"palco|tenda|food_truck|banheiro|gerador|ambulancia|posto_medico|saida|extintor|unknown",
-        "bbox":[x,y,w,h], "label":"texto curto", "confidence":0..1, "color":"#hex opcional" }
-    ],
-    "texts": [
-      { "id":"t1", "text":"conteúdo exato", "x":0..1, "y":0..1, "fontSize":0..1 (proporcional à altura), "color":"#hex", "weight":"bold|normal", "rotation":0, "confidence":0..1 }
-    ],
-    "legend": [
-      { "id":"lg1", "bbox":[x,y,w,h], "items":[{"symbol":"opt","color":"#hex","label":"texto"}] }
-    ]
-  }
-}
-
-REGRAS CRÍTICAS:
-- Detecte TODOS os textos visíveis (títulos, labels, números, legendas). Não pule nenhum.
-- Detecte TODAS as áreas coloridas como "zones" com a COR REAL aproximada em hex.
-- Detecte TODAS as linhas/perímetros/caminhos como "boundaries" (polyline para caminhos, polygon para áreas fechadas).
-- Detecte TODOS os ícones/objetos. Se não souber o tipo, use "unknown" e preencha label com o que estiver escrito ou descrição curta.
-- Se há uma legenda/quadro de símbolos, coloque em "legend".
-- NUNCA invente itens que não existem na imagem.
-- NUNCA agrupe textos diferentes em um só.
-- Cores em hex (#rrggbb).`;
-
-const FALLBACK: FloorPlanData = {
-  width: 1000,
-  height: 680,
-  layers: {
-    boundaries: [
-      { id: "b1", shape: "rect", bbox: [0.05, 0.08, 0.9, 0.84], stroke: "#0a0a0a", strokeWidth: 2, dashed: true },
-    ],
-    zones: [
-      { id: "z1", shape: "rect", bbox: [0.38, 0.12, 0.24, 0.14], fill: "#111111", opacity: 0.85, label: "Palco" },
-    ],
-    icons: [
-      { id: "i1", type: "saida", bbox: [0.05, 0.5, 0.04, 0.08], label: "Saída", confidence: 0.5 },
-      { id: "i2", type: "tenda", bbox: [0.12, 0.35, 0.12, 0.12], label: "Tenda", confidence: 0.5 },
-    ],
-    texts: [
-      { id: "t1", text: "EXEMPLO — IA indisponível", x: 0.3, y: 0.05, fontSize: 0.025, weight: "bold", color: "#dc2626" },
-    ],
-    legend: [],
-  },
+type Detected = {
+  id: string;
+  type: AnalysisType;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  confidence: number;
 };
 
-async function callVision(imageDataUrl: string): Promise<FloorPlanData | null> {
-  const apiKey = process.env.LOVABLE_API_KEY;
-  if (!apiKey) return null;
+type AnalysisResult = {
+  canvas: {
+    width: number;
+    height: number;
+  };
+  objects: Detected[];
+};
 
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-pro",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Converta esta imagem em planta baixa por camadas com máxima fidelidade. Retorne SOMENTE JSON." },
-            { type: "image_url", image_url: { url: imageDataUrl } },
-          ],
-        },
-      ],
-      response_format: { type: "json_object" },
-    }),
-  });
+type ImagePayload = {
+  base64: string;
+  mimeType: string;
+  dimensions: {
+    width: number;
+    height: number;
+  };
+};
 
-  if (!res.ok) {
-    console.error("AI gateway error", res.status, await res.text().catch(() => ""));
-    return null;
-  }
-  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const content = json.choices?.[0]?.message?.content;
-  if (!content) return null;
-
-  try {
-    const parsed = JSON.parse(content) as Partial<FloorPlanData>;
-    const layers = parsed.layers ?? ({} as Partial<FloorPlanData["layers"]>);
-    const data: FloorPlanData = {
-      width: Number(parsed.width) || 1000,
-      height: Number(parsed.height) || 680,
-      layers: {
-        boundaries: Array.isArray(layers.boundaries) ? layers.boundaries : [],
-        zones: Array.isArray(layers.zones) ? layers.zones : [],
-        icons: Array.isArray(layers.icons) ? layers.icons : [],
-        texts: Array.isArray(layers.texts) ? layers.texts : [],
-        legend: Array.isArray(layers.legend) ? layers.legend : [],
-      },
-    };
-    // give ids if missing
-    let n = 0;
-    const idify = <T extends { id?: string }>(arr: T[], prefix: string) =>
-      arr.forEach((o) => { if (!o.id) o.id = `${prefix}-${++n}`; });
-    idify(data.layers.boundaries, "b");
-    idify(data.layers.zones, "z");
-    idify(data.layers.icons, "i");
-    idify(data.layers.texts, "t");
-    idify(data.layers.legend, "lg");
-    return data;
-  } catch (e) {
-    console.error("Parse error", e);
-    return null;
-  }
-}
+const TYPE_SET = new Set<string>(ANALYSIS_TYPES);
+const DEFAULT_CANVAS = { width: 1000, height: 680 };
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export const Route = createFileRoute("/api/analyze-image")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        try {
-          const form = await request.formData();
-          const file = form.get("file");
-          if (!(file instanceof File)) {
-            return Response.json({ error: "Arquivo ausente" }, { status: 400 });
-          }
-          const buf = await file.arrayBuffer();
-          const b64 = Buffer.from(buf).toString("base64");
-          const mime = file.type || "image/png";
-          const dataUrl = `data:${mime};base64,${b64}`;
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) {
+          return json({ error: "ANTHROPIC_API_KEY is not configured." }, 500);
+        }
 
-          const data = await callVision(dataUrl);
-          if (!data) {
-            return Response.json({ data: FALLBACK, fallback: true });
-          }
-          const totals =
-            data.layers.boundaries.length +
-            data.layers.zones.length +
-            data.layers.icons.length +
-            data.layers.texts.length +
-            data.layers.legend.length;
-          if (totals === 0) {
-            return Response.json({ data: FALLBACK, fallback: true });
-          }
-          return Response.json({ data });
-        } catch (e) {
-          console.error(e);
-          return Response.json({ data: FALLBACK, fallback: true });
+        const image = await imageFromRequest(request).catch((error) => {
+          if (error instanceof Error) return error;
+          return new Error("Could not read uploaded image.");
+        });
+        if (image instanceof Error) {
+          return json({ error: image.message }, image.message.includes("10MB") ? 413 : 400);
+        }
+        if (!image) {
+          return json({ error: "Send an image as multipart field 'file' or 'image'." }, 400);
+        }
+
+        const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-latest",
+            max_tokens: 4096,
+            temperature: 0,
+            system:
+              "You are a precise visual detection engine. Return only strict JSON. Do not include markdown, code fences, or explanation.",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: image.mimeType,
+                      data: image.base64,
+                    },
+                  },
+                  {
+                    type: "text",
+                    text: promptForImage(image.dimensions),
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+
+        if (!claudeResponse.ok) {
+          const detail = await claudeResponse.text().catch(() => "");
+          return json({ error: "Claude Vision request failed.", detail }, claudeResponse.status);
+        }
+
+        const data = (await claudeResponse.json()) as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+        const text = data.content?.find((part) => part.type === "text" && part.text)?.text;
+        if (!text) {
+          return json({ error: "Claude Vision returned an empty response." }, 502);
+        }
+
+        try {
+          const parsed = extractJson(text);
+          return json(normalizeAnalysis(parsed, image.dimensions));
+        } catch (error) {
+          return json(
+            { error: error instanceof Error ? error.message : "Could not parse Claude JSON." },
+            502,
+          );
         }
       },
     },
   },
 });
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+async function imageFromRequest(request: Request): Promise<ImagePayload | null> {
+  const form = await request.formData().catch(() => null);
+  const file = form?.get("file") ?? form?.get("image");
+  if (!(file instanceof File)) return null;
+  if (!file.type.startsWith("image/")) return null;
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new Error("Image must be 10MB or smaller.");
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return {
+    base64: bytesToBase64(bytes),
+    mimeType: file.type || "image/png",
+    dimensions: readImageDimensions(bytes),
+  };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function promptForImage(dimensions: { width: number; height: number }) {
+  return `Analyze this image as an event map, venue plan, aerial photo, or floorplan.
+
+Return only one valid JSON object exactly matching this schema:
+{
+  "canvas": { "width": number, "height": number },
+  "objects": [
+    {
+      "id": string,
+      "type": "stage" | "tent" | "bathroom" | "ambulance" | "medical" | "generator" | "food_truck" | "emergency_exit" | "fire_extinguisher" | "text" | "wall" | "area" | "gate" | "unknown",
+      "label": string,
+      "x": number,
+      "y": number,
+      "width": number,
+      "height": number,
+      "rotation": number,
+      "confidence": number
+    }
+  ]
+}
+
+Use the original image pixel coordinate system. The image dimensions are ${dimensions.width}x${dimensions.height}.
+x and y are the top-left corner of the bounding box. width and height are positive pixels. rotation is degrees clockwise. confidence is 0 to 1.
+Use only the allowed type strings. If unsure, use "unknown".`;
+}
+
+function extractJson(text: string): unknown {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start === -1 || end <= start) throw new Error("Claude did not return valid JSON.");
+    return JSON.parse(trimmed.slice(start, end + 1));
+  }
+}
+
+function normalizeAnalysis(
+  value: unknown,
+  fallbackCanvas: { width: number; height: number },
+): AnalysisResult {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const rawCanvas =
+    source.canvas && typeof source.canvas === "object"
+      ? (source.canvas as Record<string, unknown>)
+      : {};
+  const canvasWidth = Math.round(clamp(number(rawCanvas.width, fallbackCanvas.width), 1, 20000));
+  const canvasHeight = Math.round(clamp(number(rawCanvas.height, fallbackCanvas.height), 1, 20000));
+  const rawObjects = Array.isArray(source.objects) ? source.objects : [];
+
+  return {
+    canvas: { width: canvasWidth, height: canvasHeight },
+    objects: rawObjects
+      .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+      .slice(0, 160)
+      .map((item, index) => {
+        const type =
+          typeof item.type === "string" && TYPE_SET.has(item.type)
+            ? (item.type as AnalysisType)
+            : "unknown";
+        return {
+          id: stringValue(item.id, `${type}-${index + 1}`, 64),
+          type,
+          label: stringValue(item.label, type.replaceAll("_", " "), 80),
+          x: Math.round(clamp(number(item.x, 0), 0, canvasWidth - 1)),
+          y: Math.round(clamp(number(item.y, 0), 0, canvasHeight - 1)),
+          width: Math.round(clamp(number(item.width, 40), 1, canvasWidth)),
+          height: Math.round(clamp(number(item.height, 40), 1, canvasHeight)),
+          rotation: number(item.rotation, 0),
+          confidence: clamp(number(item.confidence, 0.5), 0, 1),
+        };
+      }),
+  };
+}
+
+function number(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function stringValue(value: unknown, fallback: string, maxLength: number): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function readImageDimensions(bytes: Uint8Array): { width: number; height: number } {
+  if (
+    bytes.length >= 24 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+
+  if (bytes.length >= 10 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) break;
+      const marker = bytes[offset + 1];
+      const length = view.getUint16(offset + 2);
+      if (length < 2) break;
+      if (
+        [0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(
+          marker,
+        )
+      ) {
+        return { width: view.getUint16(offset + 7), height: view.getUint16(offset + 5) };
+      }
+      offset += 2 + length;
+    }
+  }
+
+  if (
+    bytes.length >= 30 &&
+    String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === "RIFF" &&
+    String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]) === "WEBP"
+  ) {
+    const format = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+    if (format === "VP8X") {
+      return {
+        width: 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16),
+        height: 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16),
+      };
+    }
+    if (format === "VP8 " && bytes.length >= 30) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return {
+        width: view.getUint16(26, true) & 0x3fff,
+        height: view.getUint16(28, true) & 0x3fff,
+      };
+    }
+    if (format === "VP8L" && bytes.length >= 25) {
+      const bits = bytes[21] | (bytes[22] << 8) | (bytes[23] << 16) | (bytes[24] << 24);
+      return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+    }
+  }
+
+  return DEFAULT_CANVAS;
+}
