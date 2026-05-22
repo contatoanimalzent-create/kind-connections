@@ -233,13 +233,13 @@ function Index() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel: upload + preview */}
-        <aside className="w-80 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-border">
-            <h2 className="text-sm font-semibold text-foreground mb-3">1. Imagem original</h2>
+        <aside className="w-72 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-border space-y-3">
+            <h2 className="text-sm font-semibold text-foreground">1. Imagem original</h2>
             <label
               onDragOver={(e) => e.preventDefault()}
               onDrop={onDrop}
-              className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-background px-4 py-6 cursor-pointer hover:border-primary/50 hover:bg-accent transition-colors"
+              className="flex flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-background px-4 py-5 cursor-pointer hover:border-primary/50 hover:bg-accent transition-colors"
             >
               <Upload className="h-5 w-5 text-muted-foreground" />
               <span className="text-xs text-muted-foreground text-center">
@@ -247,22 +247,8 @@ function Index() {
               </span>
               <input type="file" accept="image/*" className="hidden" onChange={onInputChange} />
             </label>
-          </div>
-
-          {imageUrl && (
-            <div className="p-4 border-b border-border">
-              <p className="text-xs font-medium text-muted-foreground mb-2">Preview</p>
-              <div className="rounded-md overflow-hidden border border-border bg-muted">
-                <img src={imageUrl} alt="Original" className="w-full h-auto" />
-              </div>
-            </div>
-          )}
-
-          <div className="p-4 mt-auto">
-            <h2 className="text-sm font-semibold text-foreground mb-3">2. Gerar</h2>
             <Button
               className="w-full"
-              size="lg"
               onClick={generate}
               disabled={!imageFile || loading}
             >
@@ -276,10 +262,19 @@ function Index() {
                 </>
               )}
             </Button>
-            <p className="text-[11px] text-muted-foreground mt-2 leading-relaxed">
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
               A IA identifica palco, tendas, food trucks, banheiros, saídas, extintores e mais.
             </p>
           </div>
+
+          {imageUrl && (
+            <div className="p-4 overflow-y-auto">
+              <p className="text-xs font-medium text-muted-foreground mb-2">Preview</p>
+              <div className="rounded-md overflow-hidden border border-border bg-muted">
+                <img src={imageUrl} alt="Original" className="w-full h-auto" />
+              </div>
+            </div>
+          )}
         </aside>
 
         {/* Canvas */}
