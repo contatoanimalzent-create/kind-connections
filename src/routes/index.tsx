@@ -212,7 +212,7 @@ function Index() {
       <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Map className="h-5 w-5" />
+            <MapIcon className="h-5 w-5" />
           </div>
           <div>
             <h1 className="text-base font-semibold text-foreground">Auto Planta IA</h1>
