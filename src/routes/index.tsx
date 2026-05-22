@@ -6,11 +6,8 @@ import { Upload, Sparkles, Download, FileImage, Loader2, Map as MapIcon, Maximiz
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
-import {
-  renderFloorPlan,
-  buildFabricObject,
-  type Detected,
-} from "@/lib/floorplan-render";
+import { renderFloorPlanLayered } from "@/lib/floorplan-render";
+import type { FloorPlanData, LayerVisibility, RenderMode } from "@/lib/floorplan-types";
 import { ObjectSidebar } from "@/components/ObjectSidebar";
 
 export const Route = createFileRoute("/")({
@@ -27,19 +24,29 @@ export const Route = createFileRoute("/")({
   }),
 });
 
-const CANVAS_W = 1000;
-const CANVAS_H = 680;
+const CANVAS_W = 1200;
+const CANVAS_H = 820;
+
+const DEFAULT_VIS: LayerVisibility = {
+  background_reference: true,
+  boundaries: true,
+  zones: true,
+  icons: true,
+  texts: true,
+  legend: true,
+};
 
 function Index() {
   const canvasElRef = useRef<HTMLCanvasElement | null>(null);
   const fabricRef = useRef<fabric.Canvas | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const [objects, setObjects] = useState<Detected[]>([]);
+  const [data, setData] = useState<FloorPlanData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [generated, setGenerated] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  const [mode, setMode] = useState<RenderMode>("high_fidelity");
+  const [visibility, setVisibility] = useState<LayerVisibility>(DEFAULT_VIS);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -62,29 +69,25 @@ function Index() {
       preserveObjectStacking: true,
     });
     fabricRef.current = c;
-
-    c.on("selection:created", (e) => {
-      const obj = e.selected?.[0] as (fabric.Object & { data?: { id?: string } }) | undefined;
-      if (obj?.data?.id) setSelectedId(obj.data.id);
-    });
-    c.on("selection:updated", (e) => {
-      const obj = e.selected?.[0] as (fabric.Object & { data?: { id?: string } }) | undefined;
-      if (obj?.data?.id) setSelectedId(obj.data.id);
-    });
-    c.on("selection:cleared", () => setSelectedId(null));
-
     return () => {
       c.dispose();
       fabricRef.current = null;
     };
   }, []);
 
+  // re-render when data / mode / visibility changes
+  useEffect(() => {
+    const c = fabricRef.current;
+    if (!c || !data) return;
+    renderFloorPlanLayered(c, data, mode, visibility);
+  }, [data, mode, visibility]);
+
   const handleFile = (file: File) => {
     setImageFile(file);
     const url = URL.createObjectURL(file);
     setImageUrl(url);
     setGenerated(false);
-    setObjects([]);
+    setData(null);
     fabricRef.current?.clear();
     fabricRef.current?.set({ backgroundColor: "#fafafa" });
     fabricRef.current?.requestRenderAll();
@@ -112,88 +115,30 @@ function Index() {
       fd.append("file", imageFile);
       const res = await fetch("/api/analyze-image", { method: "POST", body: fd });
       if (!res.ok) throw new Error("Falha na análise");
-      const data = (await res.json()) as { objects: Detected[]; fallback?: boolean };
-      setObjects(data.objects);
-      if (fabricRef.current) {
-        renderFloorPlan(fabricRef.current, data.objects);
-      }
+      const json = (await res.json()) as { data: FloorPlanData; fallback?: boolean };
+      const withImage: FloorPlanData = { ...json.data, imageUrl: imageUrl ?? undefined };
+      setData(withImage);
       setGenerated(true);
-      if (data.fallback) {
-        toast.warning("IA indisponível — mostrando exemplo");
-      } else {
-        toast.success(`${data.objects.length} objetos detectados na imagem`);
-      }
+      const counts = withImage.layers;
+      const total =
+        counts.boundaries.length + counts.zones.length + counts.icons.length + counts.texts.length + counts.legend.length;
+      if (json.fallback) toast.warning("IA indisponível — mostrando exemplo");
+      else
+        toast.success(
+          `${total} elementos: ${counts.icons.length} ícones, ${counts.texts.length} textos, ${counts.zones.length} áreas, ${counts.boundaries.length} linhas`,
+        );
     } catch (err) {
       console.error(err);
       toast.error("Erro ao gerar planta baixa");
     } finally {
       setLoading(false);
     }
-  }, [imageFile]);
+  }, [imageFile, imageUrl]);
 
-  const findFabricById = (id: string) => {
-    const c = fabricRef.current;
-    if (!c) return undefined;
-    return c.getObjects().find((o) => {
-      const d = (o as fabric.Object & { data?: { id?: string } }).data;
-      return d?.id === id;
-    });
-  };
-
-  const handleSelect = (id: string) => {
-    const obj = findFabricById(id);
-    const c = fabricRef.current;
-    if (obj && c) {
-      c.setActiveObject(obj);
-      c.requestRenderAll();
-      setSelectedId(id);
-    }
-  };
-
-  const handleDelete = (id: string) => {
-    const obj = findFabricById(id);
-    const c = fabricRef.current;
-    if (obj && c) {
-      c.remove(obj);
-      c.requestRenderAll();
-    }
-    setObjects((prev) => prev.filter((o) => o.id !== id));
-    if (selectedId === id) setSelectedId(null);
-  };
-
-  const handleRename = (id: string) => {
-    const current = objects.find((o) => o.id === id);
-    if (!current) return;
-    const next = window.prompt("Novo nome:", current.label);
-    if (!next) return;
-    setObjects((prev) => prev.map((o) => (o.id === id ? { ...o, label: next } : o)));
-    const obj = findFabricById(id) as (fabric.Group & { data?: { label?: string } }) | undefined;
-    if (obj?.data) obj.data.label = next;
-  };
-
-  const handleAdd = (type: string) => {
-    const id = `${type}-${Date.now()}`;
-    const newObj: Detected = {
-      id,
-      type,
-      label:
-        type === "texto"
-          ? "Novo texto"
-          : type.replace("_", " ").replace(/^./, (s) => s.toUpperCase()),
-      x: 200,
-      y: 200,
-      width: type === "extintor" ? 28 : type === "texto" ? 120 : 100,
-      height: type === "extintor" ? 28 : type === "texto" ? 20 : 70,
-      confidence: 1,
-      text: type === "texto" ? "Novo texto" : undefined,
-    };
-    setObjects((prev) => [...prev, newObj]);
-    const c = fabricRef.current;
-    if (c) {
-      c.add(buildFabricObject(newObj));
-      c.requestRenderAll();
-    }
-  };
+  const handleDeleteIcon = (id: string) =>
+    setData((d) => (d ? { ...d, layers: { ...d.layers, icons: d.layers.icons.filter((o) => o.id !== id) } } : d));
+  const handleDeleteText = (id: string) =>
+    setData((d) => (d ? { ...d, layers: { ...d.layers, texts: d.layers.texts.filter((o) => o.id !== id) } } : d));
 
   const exportPNG = () => {
     const c = fabricRef.current;
@@ -224,7 +169,6 @@ function Index() {
     <div className="flex h-screen w-full flex-col bg-background">
       <Toaster position="top-right" />
 
-      {/* Header */}
       {!focusMode && (
         <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
           <div className="flex items-center gap-3">
@@ -233,9 +177,7 @@ function Index() {
             </div>
             <div>
               <h1 className="text-base font-semibold text-foreground">Auto Planta IA</h1>
-              <p className="text-xs text-muted-foreground">
-                Imagens de eventos → plantas baixas editáveis
-              </p>
+              <p className="text-xs text-muted-foreground">Plantas baixas por camadas — máxima fidelidade</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -253,7 +195,6 @@ function Index() {
       )}
 
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Left panel: upload + preview */}
         {!focusMode && (
           <aside className="w-72 shrink-0 border-r border-border bg-card flex flex-col overflow-hidden">
             <div className="p-4 border-b border-border space-y-3">
@@ -269,11 +210,7 @@ function Index() {
                 </span>
                 <input type="file" accept="image/*" className="hidden" onChange={onInputChange} />
               </label>
-              <Button
-                className="w-full"
-                onClick={generate}
-                disabled={!imageFile || loading}
-              >
+              <Button className="w-full" onClick={generate} disabled={!imageFile || loading}>
                 {loading ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Analisando...
@@ -285,7 +222,7 @@ function Index() {
                 )}
               </Button>
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                A IA identifica palco, tendas, food trucks, banheiros, saídas, extintores e mais.
+                A IA preserva textos, cores, linhas e ícones em camadas separadas.
               </p>
             </div>
 
@@ -300,15 +237,16 @@ function Index() {
           </aside>
         )}
 
-        {/* Canvas */}
         <main className="flex-1 overflow-auto bg-muted/30 p-6">
           <div className="mx-auto rounded-lg border border-border bg-white shadow-sm" style={{ width: CANVAS_W }}>
             {!focusMode && (
               <div className="border-b border-border px-4 py-2 flex items-center justify-between">
-                <p className="text-xs font-medium text-muted-foreground">Planta baixa</p>
+                <p className="text-xs font-medium text-muted-foreground">
+                  Planta baixa — {mode === "high_fidelity" ? "Alta fidelidade" : "Planta limpa"}
+                </p>
                 {generated && (
                   <p className="text-[11px] text-muted-foreground">
-                    Clique nos objetos para mover, redimensionar ou rotacionar
+                    Alterne camadas e modo na lateral direita
                   </p>
                 )}
               </div>
@@ -317,19 +255,18 @@ function Index() {
           </div>
         </main>
 
-        {/* Right sidebar */}
         {!focusMode && (
           <ObjectSidebar
-            objects={objects}
-            selectedId={selectedId}
-            onSelect={handleSelect}
-            onDelete={handleDelete}
-            onRename={handleRename}
-            onAdd={handleAdd}
+            data={data}
+            mode={mode}
+            onModeChange={setMode}
+            visibility={visibility}
+            onVisibilityChange={setVisibility}
+            onDeleteIcon={handleDeleteIcon}
+            onDeleteText={handleDeleteText}
           />
         )}
 
-        {/* Focus mode exit button */}
         {focusMode && (
           <Button
             variant="outline"
