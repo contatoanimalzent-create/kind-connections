@@ -112,13 +112,17 @@ function Index() {
       fd.append("file", imageFile);
       const res = await fetch("/api/analyze-image", { method: "POST", body: fd });
       if (!res.ok) throw new Error("Falha na análise");
-      const data = (await res.json()) as { objects: Detected[] };
+      const data = (await res.json()) as { objects: Detected[]; fallback?: boolean };
       setObjects(data.objects);
       if (fabricRef.current) {
         renderFloorPlan(fabricRef.current, data.objects);
       }
       setGenerated(true);
-      toast.success(`${data.objects.length} objetos detectados`);
+      if (data.fallback) {
+        toast.warning("IA indisponível — mostrando exemplo");
+      } else {
+        toast.success(`${data.objects.length} objetos detectados na imagem`);
+      }
     } catch (err) {
       console.error(err);
       toast.error("Erro ao gerar planta baixa");
